@@ -184,6 +184,19 @@ input::placeholder{color:#A39D91;font-weight:500}
   box-shadow:0 2px 0 var(--shadow);
 }
 .tg{display:flex;flex-wrap:wrap;gap:6px}
+/* Campo minado */
+.mgrid{display:grid;grid-template-columns:repeat(var(--mn),var(--mu));grid-auto-rows:var(--mu);gap:2px;padding:6px;background:var(--ink);
+  border-radius:12px;box-shadow:0 5px 0 var(--shadow);width:max-content;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;touch-action:manipulation}
+.mc{width:var(--mu);height:var(--mu);display:flex;align-items:center;justify-content:center;font-family:var(--f-mono);font-weight:800;font-size:calc(var(--mu)*.56);line-height:1;border-radius:calc(var(--mu)*.16)}
+.mc.h{background:#E9E1CE;box-shadow:inset 0 calc(var(--mu)*-.08) 0 rgba(0,0,0,.14),inset 0 calc(var(--mu)*.06) 0 rgba(255,255,255,.75)}
+.mc.r{background:#FFFDF9}
+.mc.n1{color:#1D56D8}.mc.n2{color:#168053}.mc.n3{color:#C92A3E}.mc.n4{color:#5B2BA8}.mc.n5{color:#99350E}.mc.n6{color:#0E7C86}.mc.n7{color:#181A1F}.mc.n8{color:#63666F}
+.mc.fl{color:var(--team-b)}.mc.ex{background:#FDE2E6;color:#C92A3E}
+.mc svg{width:64%;height:64%}
+.mc[data-act]{cursor:pointer}
+.btn .fi{width:15px;height:15px;vertical-align:-2px;margin-right:4px}
+.tboards .mgrid{margin:0 auto}
+
 .tg .seg small{display:block;font:600 11px/1 var(--f-ui);opacity:.7;margin-top:4px}
 /* Damas */
 .g-board.dm{display:flex;justify-content:center}
@@ -1100,6 +1113,12 @@ function foldDamas(moves,starter){
   const taken={A:0,B:0};
   const sd=t=>t==='A'?1:-1;
   for(let i=0;i<moves.length&&!over;i++){
+    if(moves[i]==='p'){
+      last={from:null,to:null,path:[],caps:[],side:turn,pass:true};plies++;
+      turn=turn==='A'?'B':'A';
+      if(!dmMoves(b,sd(turn)).length){over=true;winner=turn==='A'?'B':'A'}
+      continue;
+    }
     const legal=dmMoves(b,sd(turn));
     const m=legal.find(x=>dmKey(x)===String(moves[i]));
     if(!m)break;
@@ -1151,6 +1170,107 @@ function dmBotChoice(st,level){
   return dmKey(pick[Math.floor(Math.random()*pick.length)]);
 }
 const dmName=s=>String.fromCharCode(97+(s&7))+(8-(s>>3));
+/* ---- Campo minado (corrida, em equipe) ----
+   Todos os lados recebem o mesmo tabuleiro. Ele começa com uma área já aberta e é gerado de modo que dê para
+   resolver só com lógica, sem chutar. Abrir uma mina é um erro (+10 s no tempo). No 3º erro o quadro volta ao início.
+   O estado vem de uma lista de ações: 'o12' abre a casa 12, 'f12' liga/desliga a bandeira. */
+const MSIZES=[[0,7,8,8,9,10],[0,9,10,12,12,14],[0,12,14,16,16,18]];
+const MN_ERR_RESET=3;
+const _mnNb={};
+function mnNb(n){
+  if(_mnNb[n])return _mnNb[n];
+  const a=[];
+  for(let r=0;r<n;r++)for(let c=0;c<n;c++){const l=[];
+    for(let dr=-1;dr<=1;dr++)for(let dc=-1;dc<=1;dc++){if(!dr&&!dc)continue;const rr=r+dr,cc=c+dc;if(rr>=0&&rr<n&&cc>=0&&cc<n)l.push(rr*n+cc)}
+    a.push(l)}
+  return _mnNb[n]=a;
+}
+/* abre a casa i e, se for zero, o que estiver ligado a ela. st: 0 fechada, 1 aberta, 2 bandeira, 3 mina estourada */
+function mnReveal(L,st,i){
+  const nb=mnNb(L.n),stack=[i];
+  while(stack.length){
+    const q=stack.pop();if(st[q]===1)continue;
+    if(L.mine[q])continue;
+    st[q]=1;
+    if(L.num[q]===0)for(const k of nb[q])if(st[k]!==1)stack.push(k);
+  }
+}
+function mnInit(L){const st=new Uint8Array(L.n*L.n);mnReveal(L,st,L.start);return st}
+/* solver por lógica: regra simples, subconjuntos e contagem total de minas */
+function mnSolvable(L){
+  const n=L.n,N=n*n,nb=mnNb(n),st=mnInit(L),mine=new Uint8Array(N);
+  let unknown=0;for(let i=0;i<N;i++)if(st[i]!==1)unknown++;
+  let minesLeft=L.nm;
+  const safeLeft=()=>{let k=0;for(let i=0;i<N;i++)if(!L.mine[i]&&st[i]!==1)k++;return k};
+  const markSafe=i=>{if(L.mine[i])throw new Error('deducao invalida');if(st[i]===1)return false;mnReveal(L,st,i);return true};
+  const markMine=i=>{if(!L.mine[i])throw new Error('deducao invalida');if(mine[i])return false;mine[i]=1;minesLeft--;return true};
+  let progress=true;
+  while(progress){
+    progress=false;
+    const cons=[];
+    for(let i=0;i<N;i++){
+      if(st[i]!==1||L.num[i]===0)continue;
+      const U=[];let m=0;
+      for(const k of nb[i]){if(st[k]===1)continue;if(mine[k])m++;else U.push(k)}
+      if(!U.length)continue;
+      const r=L.num[i]-m;
+      if(r===0){for(const k of U)if(markSafe(k))progress=true;continue}
+      if(r===U.length){for(const k of U)if(markMine(k))progress=true;continue}
+      cons.push({U,r});
+    }
+    if(progress)continue;
+    for(let a=0;a<cons.length&&!progress;a++)for(let b=0;b<cons.length&&!progress;b++){
+      if(a===b)continue;const A=cons[a],B=cons[b];
+      if(A.U.length>=B.U.length)continue;
+      if(!A.U.every(x=>B.U.includes(x)))continue;
+      const diff=B.U.filter(x=>!A.U.includes(x)),dr=B.r-A.r;
+      if(dr===0){for(const k of diff)if(markSafe(k))progress=true}
+      else if(dr===diff.length){for(const k of diff)if(markMine(k))progress=true}
+    }
+    if(progress)continue;
+    /* contagem total */
+    let unk=0;for(let i=0;i<N;i++)if(st[i]!==1&&!mine[i])unk++;
+    if(unk>0&&minesLeft===0){for(let i=0;i<N;i++)if(st[i]!==1&&!mine[i])markSafe(i);progress=true}
+  }
+  return safeLeft()===0;
+}
+function genMinas(seed,n){
+  const N=n*n,nb=mnNb(n);
+  const nm=Math.round(N*(n<=8?.15:n<=12?.17:.18));
+  let best=null;
+  for(let attempt=0;attempt<4000;attempt++){
+    const R=rng(seed+attempt*7919);
+    const lo=Math.floor(n*.3),hi=Math.ceil(n*.7);
+    const sr=lo+Math.floor(R()*(hi-lo)),sc=lo+Math.floor(R()*(hi-lo)),start=sr*n+sc;
+    const banned=new Set([start,...nb[start]]);
+    const free=[];for(let i=0;i<N;i++)if(!banned.has(i))free.push(i);
+    for(let i=free.length-1;i>0;i--){const j=Math.floor(R()*(i+1));[free[i],free[j]]=[free[j],free[i]]}
+    const mine=new Array(N).fill(0);for(let k=0;k<nm;k++)mine[free[k]]=1;
+    const num=new Array(N).fill(0);for(let i=0;i<N;i++){let c=0;for(const k of nb[i])c+=mine[k];num[i]=c}
+    const L={n,nm,start,mine,num};
+    let okS=false;try{okS=mnSolvable(L)}catch(e){okS=false}
+    if(okS){L.attempt=attempt;return L}
+    if(!best)best=L;
+  }
+  return best;
+}
+function foldMinas(L,acts){
+  const N=L.n*L.n,init=L._init||(L._init=mnInit(L));
+  let st=init.slice(),errs=0,cyc=0,resets=0,done=false;
+  const safeTotal=N-L.nm;
+  const revealed=()=>{let k=0;for(let i=0;i<N;i++)if(st[i]===1)k++;return k};
+  for(const a of acts){
+    if(done)break;
+    const t=a[0],i=+a.slice(1);if(!(i>=0&&i<N))continue;
+    if(t==='f'){if(st[i]===0)st[i]=2;else if(st[i]===2)st[i]=0;continue}
+    if(t==='o'){
+      if(st[i]!==0)continue;
+      if(L.mine[i]){st[i]=3;errs++;cyc++;if(cyc>=MN_ERR_RESET){st=init.slice();cyc=0;resets++}}
+      else{mnReveal(L,st,i);if(revealed()===safeTotal)done=true}
+    }
+  }
+  return{st,errs,cyc,resets,done,rev:revealed(),total:safeTotal,flags:st.reduce((a,v)=>a+(v===2?1:0),0)};
+}
 const pilhasOk=(a,b,x,y)=>x>=0&&y>=0&&x<=a&&y<=b&&((x>0&&y===0)||(y>0&&x===0)||(x>0&&x===y));
 const PERD=[[0,0],[1,2],[2,1],[3,5],[5,3],[4,7],[7,4]];
 
@@ -1159,8 +1279,9 @@ const GAMES={
   pilar:{nome:'Pilar rolante',tipo:'corrida',desc:'Role o pilar até ele ficar em pé no bloco dourado. Se cair para fora, volta ao início (e conta como jogada). Vence quem usar menos jogadas.'},
   caixas:{nome:'Caixas',tipo:'corrida',desc:'Empurre as caixas até cobrir todos os alvos (qualquer caixa em qualquer alvo), sem travar nenhuma. Vence quem usar menos jogadas.'},
   picross:{nome:'Picross',tipo:'corrida',desc:'Os dois lados recebem o mesmo desenho escondido. Use os números das linhas e colunas para pintar as casas certas. Errou uma casa: +10 s no seu tempo. Vence quem terminar com o menor tempo total. Em equipe, todos pintam o mesmo quadro ao mesmo tempo.'},
+  minas:{nome:'Campo minado',tipo:'corrida',desc:'Os dois lados recebem o mesmo tabuleiro, já com uma parte aberta, e dá para resolver só com lógica, sem chutar. Abram todas as casas sem mina. Abrir uma mina é erro: +10 s no tempo, e no 3º erro o quadro volta ao início (os erros continuam contando). Segure o dedo numa casa para pôr bandeira. Vence quem terminar com o menor tempo total. Em equipe, todos jogam no mesmo quadro ao mesmo tempo.'},
   pontos:{nome:'Pontos (o último perde)',tipo:'turnos',desc:'20 pontos no quadro. Cada um apaga 1, 2 ou 3 na sua vez. Quem apagar o último ponto perde. Você tem 10 segundos para jogar: passou disso, a vez passa para o outro lado.'},
-  damas:{nome:'Damas brasileiras',tipo:'turnos',desc:'Damas 8×8 com as regras brasileiras: a captura é obrigatória e vale a que leva mais peças. A pedra captura para frente e para trás, e a dama anda e captura a qualquer distância. Vence quem capturar tudo ou deixar o adversário sem lance. Sem limite de tempo. Vinte lances só com damas e sem captura é empate.'},
+  damas:{nome:'Damas brasileiras',tipo:'turnos',desc:'Damas 8×8 com as regras brasileiras: a captura é obrigatória e vale a que leva mais peças. A pedra captura para frente e para trás, e a dama anda e captura a qualquer distância. Vence quem capturar tudo ou deixar o adversário sem lance. Você tem 20 segundos por lance: passou disso, perde a vez. Vinte lances só com damas e sem captura é empate.'},
   pilhas:{nome:'Duas pilhas',tipo:'turnos',desc:'Pilhas de 7 e 5. Na sua vez, tire quantas quiser de uma pilha, ou a mesma quantidade das duas. Quem tirar a última pedra vence. Você tem 10 segundos para jogar: passou disso, a vez passa para o outro lado.'}
 };
 const SIDE={A:'Azul',B:'Laranja'};
@@ -1170,6 +1291,8 @@ const other=s=>s==='A'?'B':'A';
 const turnFold=(mv,stt)=>room.game==='pontos'?foldPontos(mv,stt):room.game==='damas'?foldDamas(mv,stt):foldPilhas(mv,stt);
 const COUNT=3500, GRACE=60000, MAXR=300000;
 const TURN_MS=10000;   /* tempo para jogar nos jogos de turnos; passou, a vez passa */
+const TURN_MS_DAMAS=20000;
+const turnMs=()=>room&&room.game==='damas'?TURN_MS_DAMAS:TURN_MS;
 const TURN_PASS_MAX=4; /* passes seguidos (2 de cada lado) encerram a rodada em empate */
 
 /* =====================================================================
@@ -1188,11 +1311,12 @@ const turmaOf=side=>{const p=sidePlayers(side)[0];return p?turmaNova(p[1].turma|
 const listOf=o=>o?Object.keys(o).sort().map(k=>o[k]):[];
 const roundNow=()=>room?.round||0;
 const isPuzzle=()=>GAMES[room.game].tipo==='corrida';
+const isTimed=()=>!!room&&(room.game==='picross'||room.game==='minas');
 const starter=r=>r%2===1?'A':'B';
 function levelFor(){
   const r=roundNow();const key=`${code}|${room.game}|${r}`;
   if(!levelCache[key]){const seed=hash(`${code}#${room.game}#${r}`);
-    levelCache[key]=room.game==='pilar'?genPilar(seed):room.game==='picross'?genPicross(seed,(PSIZES[room.pz||0]||PSIZE)[Math.min(r,5)]):genCaixas(seed,r===1?2:3)}
+    levelCache[key]=room.game==='pilar'?genPilar(seed):room.game==='picross'?genPicross(seed,(PSIZES[room.pz||0]||PSIZE)[Math.min(r,5)]):room.game==='minas'?genMinas(seed,(MSIZES[room.pz||0]||MSIZES[0])[Math.min(r,5)]):genCaixas(seed,r===1?2:3)}
   return levelCache[key];
 }
 const movesOf=side=>listOf(room?.logs?.[roundNow()]?.[side]?.moves);
@@ -1210,17 +1334,23 @@ const turnMover=()=>{const r=roundNow(),i=turnMoves().length;return i%2===0?star
 const trailingPasses=()=>{const mv=turnMoves();let k=0;for(let i=mv.length-1;i>=0&&mv[i]==='p';i--)k++;return k};
 function wins(){const w={A:0,B:0};Object.values(room?.res||{}).forEach(v=>{if(v==='A'||v==='B')w[v]++});return w}
 const SOLO_FASES=5;
+const bestOf=()=>[1,3,5].includes(room?.bo)?room.bo:3;
+const winsNeeded=()=>Math.ceil(bestOf()/2);
 function decided(){const w=wins();
   if(room?.solo&&isPuzzle()){const r=roundNow();return(r>=SOLO_FASES&&room.res?.[r])?'A':null}
-  if(w.A>=2)return'A';if(w.B>=2)return'B';
-  const r=roundNow();if(r>=5&&room?.res?.[r]){return w.A>w.B?'A':w.B>w.A?'B':'T'}return null}
+  const need=winsNeeded();
+  if(w.A>=need)return'A';if(w.B>=need)return'B';
+  /* acabaram as rodadas da série: vence quem tem mais vitórias; empatado, joga rodada de desempate (até 2 extras) */
+  const r=roundNow(),bo=bestOf();
+  if(room?.res?.[r]&&r>=bo){if(w.A!==w.B)return w.A>w.B?'A':'B';if(r>=bo+2)return'T'}
+  return null}
 
 /* ---------- ações de sala ---------- */
 const ALPHA='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const newCode=()=>Array.from({length:4},()=>ALPHA[Math.floor(Math.random()*ALPHA.length)]).join('');
-async function createRoom(game,size,pz,solo,bot){
+async function createRoom(game,size,pz,solo,bot,bo){
   let c;for(let i=0;i<8;i++){c=newCode();if(!(await db.get('rooms/'+c)))break}
-  await db.set('rooms/'+c,{created:Date.now(),host:me.id,game,size:solo?1:size,solo:!!solo,bot:bot||.75,pz:pz||0,status:'lobby',round:0});
+  await db.set('rooms/'+c,{created:Date.now(),host:me.id,game,size:solo?1:size,solo:!!solo,bot:bot||.75,pz:pz||0,bo:[1,3,5].includes(bo)?bo:3,status:'lobby',round:0});
   await enter(c);
 }
 async function enter(c){
@@ -1247,7 +1377,7 @@ function myTurnInfo(){
   const s=mySide();if(!s||!room||room.status!=='play')return{ok:false};
   const r=roundNow();if(room.res?.[r])return{ok:false};
   if(Date.now()<room.roundStart)return{ok:false,wait:true};
-  if(room.game==='picross')return{ok:!room.logs?.[r]?.[s]?.done,done:!!room.logs?.[r]?.[s]?.done};
+  if(isTimed())return{ok:!room.logs?.[r]?.[s]?.done,done:!!room.logs?.[r]?.[s]?.done};
   if(isPuzzle()){
     if(room.logs?.[r]?.[s]?.done)return{ok:false,done:true};
     const team=sidePlayers(s);const slot=movesOf(s).length%team.length;
@@ -1260,7 +1390,7 @@ function myTurnInfo(){
 }
 const caixasInicial=(L,st)=>st.p[0]===L.player[0]&&st.p[1]===L.player[1]&&st.boxes.every((b,i)=>b[0]===L.boxes[i][0]&&b[1]===L.boxes[i][1]);
 async function puzzleMove(d){
-  if(room.game==='picross')return;
+  if(isTimed())return;
   if(room.game==='pilar'&&ui.pilarLock&&Date.now()<ui.pilarLock)return;
   const t=myTurnInfo();if(!t.ok||ui.busy)return;
   const s=mySide(),r=roundNow(),L=levelFor(),mv=movesOf(s);
@@ -1299,34 +1429,34 @@ async function passTurn(){
 }
 /* Verifica o tempo: o próprio jogador da vez passa aos 10 s; o anfitrião cobre se ele sumiu. */
 function turnWatch(){
-  if(!room||room.status!=='play'||isPuzzle()||!db||room.game==='damas')return;
+  if(!room||room.status!=='play'||isPuzzle()||!db)return;
   const r=roundNow();if(room.res?.[r]||Date.now()<room.roundStart)return;
   if(room.solo&&turnMover()==='B')return;
   const el=Date.now()-turnT0();
-  if(myTurnInfo().ok){if(el>=TURN_MS)passTurn()}
-  else if(room.host===me.id&&el>=TURN_MS+1200)passTurn();
+  if(myTurnInfo().ok){if(el>=turnMs())passTurn()}
+  else if(room.host===me.id&&el>=turnMs()+1200)passTurn();
 }
 function turnClockTick(){
   document.querySelectorAll('.tclock').forEach(c=>{
-    const left=Math.max(0,TURN_MS-(Date.now()-turnT0())),fi=c.querySelector('i'),b=c.querySelector('b');
-    fi.style.width=(left/TURN_MS*100).toFixed(1)+'%';const sec=Math.ceil(left/1000);if(b.textContent!==String(sec))b.textContent=sec;
-    c.classList.toggle('low',left<=3000);
+    const left=Math.max(0,turnMs()-(Date.now()-turnT0())),fi=c.querySelector('i'),b=c.querySelector('b');
+    fi.style.width=(left/turnMs()*100).toFixed(1)+'%';const sec=Math.ceil(left/1000);if(b.textContent!==String(sec))b.textContent=sec;
+    c.classList.toggle('low',left<=3000||left<=turnMs()*.2);
   });
 }
-const clockHTML=(mine)=>`<div class="tclock ${mine?'mine':''}"><span>Tempo</span><div class="bg"><i></i></div><b>10</b></div>`;
+const clockHTML=(mine)=>`<div class="tclock ${mine?'mine':''}"><span>Tempo</span><div class="bg"><i></i></div><b>${turnMs()/1000}</b></div>`;
 async function hostTick(){
   if(!room||room.host!==me.id||room.status!=='play')return;
   const r=roundNow();const now=Date.now();
   if(!room.res?.[r]){
     let w=null;
     if(isPuzzle()&&room.solo){
-      if(room.logs?.[r]?.A?.done)w='A';else if(now>room.roundStart+(room.game==='picross'?(room.pz===2?3600000:1800000):900000))w='T';
+      if(room.logs?.[r]?.A?.done)w='A';else if(now>room.roundStart+(isTimed()?(room.pz===2?3600000:1800000):900000))w='T';
     }else if(isPuzzle()){
       const dA=room.logs?.[r]?.A?.done,dB=room.logs?.[r]?.B?.done;
-      const sc=d=>d.score??d.moves,gr=room.game==='picross'?(room.pz===2?180000:90000):GRACE;
+      const sc=d=>d.score??d.moves,gr=isTimed()?(room.pz===2?180000:90000):GRACE;
       if(dA&&dB){w=sc(dA)!==sc(dB)?(sc(dA)<sc(dB)?'A':'B'):(dA.at!==dB.at?(dA.at<dB.at?'A':'B'):'T')}
       else if((dA||dB)&&now>(dA||dB).at+gr)w=dA?'A':'B';
-      else if(now>room.roundStart+(room.game==='picross'?(room.pz===2?1800000:900000):MAXR))w='T';
+      else if(now>room.roundStart+(isTimed()?(room.pz===2?1800000:900000):MAXR))w='T';
     }else{
       const st=turnFold(turnMoves(),starter(r));
       if(st.over)w=st.winner;
@@ -1337,7 +1467,7 @@ async function hostTick(){
   }else if(decided()&&!room.final){
     const w=decided();
     await db.set(`rooms/${code}/final`,w);
-    const entry={game:room.game,ts:now,A:turmaOf('A'),B:turmaOf('B'),w,winnerTurma:w==='T'?'':turmaOf(w)};
+    const entry={game:room.game,bo:bestOf(),ts:now,A:turmaOf('A'),B:turmaOf('B'),w,winnerTurma:w==='T'?'':turmaOf(w)};
     if(!room.solo)await db.set(`placar/matches/${code}-${now.toString(36)}`,entry);
   }
 }
@@ -1940,6 +2070,7 @@ const ICON={
   caixas:SV('<path d="M4 7.5L12 3l8 4.5v9L12 21l-8-4.5z"/><path d="M4 7.5L12 12l8-4.5M12 12v9"/>'),
   picross:SV('<rect x="3" y="3" width="7.5" height="7.5" rx="1" fill="currentColor"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1" fill="currentColor"/>'),
   pontos:SV('<circle cx="7" cy="8" r="2.4" fill="currentColor"/><circle cx="17" cy="8" r="2.4" fill="currentColor"/><circle cx="7" cy="16" r="2.4" fill="currentColor"/><circle cx="17" cy="16" r="2.4" stroke-dasharray="2 2"/>'),
+  minas:SV('<circle cx="12" cy="12" r="4.6" fill="currentColor"/><path d="M12 3v3.2M12 17.8V21M3 12h3.2M17.8 12H21M5.7 5.7l2.3 2.3M16 16l2.3 2.3M18.3 5.7L16 8M8 16l-2.3 2.3"/>'),
   pilhas:SV('<path d="M4 18h6M5 14h4M6 10h2M14 18h6M15 14h4"/>'),
   damas:SV('<circle cx="8" cy="8" r="3.6" fill="currentColor"/><circle cx="16" cy="16" r="3.6"/><path d="M13 5h6v6M5 13v6h6"/>')
 };
@@ -2012,17 +2143,18 @@ function renderHome(){
       <button type="button" class="seg ${fmt==='solo'?'on':''}" data-act="fmt" data-v="solo">Solo</button>
     </div>
     <input type="hidden" id="sz" value="${fmt==='2'?2:fmt==='3'?3:fmt==='5'?5:1}">
-    ${fmt==='2'||fmt==='3'||fmt==='5'?`<p class="gdesc plain">Na equipe, os jogadores se alternam nas jogadas.${turnos&&gs!=='damas'?' Quem não jogar em 10 segundos perde a vez.':''}</p>`:''}
-    ${fmt==='1'&&turnos&&gs!=='damas'?'<p class="gdesc plain">Quem não jogar em 10 segundos perde a vez.</p>':''}
+    ${fmt==='2'||fmt==='3'||fmt==='5'?`<p class="gdesc plain">Na equipe, os jogadores se alternam nas jogadas.${turnos?` Quem não jogar em ${gs==='damas'?20:10} segundos perde a vez.`:''}</p>`:''}
+    ${fmt==='1'&&turnos?`<p class="gdesc plain">Quem não jogar em ${gs==='damas'?20:10} segundos perde a vez.</p>`:''}
     ${fmt==='solo'?(turnos?`<div class="fold"><label>Nível do robô</label><div class="tg">${[['.5','Fácil'],['.75','Normal'],['1','Difícil']].map(([v,n])=>`<button type="button" class="seg ${ui.bot===v?'on':''}" data-act="botsel" data-v="${v}">${n}</button>`).join('')}</div></div>`:'<p class="gdesc plain">Você joga sozinho, em 5 fases de dificuldade crescente.</p>'):''}
-    <div id="pzw" class="fold" style="display:${gs==='picross'?'block':'none'}">
-      <label>Tamanho do Picross</label>
+    ${fmt==='solo'&&!turnos?'':`<div class="fold"><label>Tamanho da partida</label><div class="tg">${[['1','MD1','1 rodada'],['3','MD3','melhor de 3'],['5','MD5','melhor de 5']].map(([v,n,d])=>`<button type="button" class="seg ${(ui.bo||'3')===v?'on':''}" data-act="bosel" data-v="${v}">${n}<small>${d}</small></button>`).join('')}</div></div>`}
+    <div id="pzw" class="fold" style="display:${gs==='picross'||gs==='minas'?'block':'none'}">
+      <label>Tamanho do ${gs==='minas'?'Campo minado':'Picross'}</label>
       <div class="tg">
-        <button type="button" class="seg ${ui.pz==='0'?'on':''}" data-act="pzsel" data-v="0">Normal<small>5 a 8</small></button>
-        <button type="button" class="seg ${ui.pz==='1'?'on':''}" data-act="pzsel" data-v="1">Grande<small>6 a 10</small></button>
-        <button type="button" class="seg ${ui.pz==='2'?'on':''}" data-act="pzsel" data-v="2">Gigante<small>10 a 15</small></button>
+        <button type="button" class="seg ${ui.pz==='0'?'on':''}" data-act="pzsel" data-v="0">Normal<small>${gs==='minas'?'7 a 10':'5 a 8'}</small></button>
+        <button type="button" class="seg ${ui.pz==='1'?'on':''}" data-act="pzsel" data-v="1">Grande<small>${gs==='minas'?'9 a 14':'6 a 10'}</small></button>
+        <button type="button" class="seg ${ui.pz==='2'?'on':''}" data-act="pzsel" data-v="2">Gigante<small>${gs==='minas'?'12 a 18':'10 a 15'}</small></button>
       </div>
-      ${ui.pz==='2'?'<p class="gdesc plain">Quadros de 10×10 até 15×15, pensados para equipes de 4 ou 5. Cada rodada tem até 30 minutos.</p>':''}
+      ${ui.pz==='2'&&(gs==='picross'||gs==='minas')?`<p class="gdesc plain">Quadros de ${gs==='minas'?'12×12 até 18×18':'10×10 até 15×15'}, pensados para equipes de 4 ou 5. Cada rodada tem até 30 minutos.</p>`:''}
       <input type="hidden" id="pz" value="${ui.pz}">
     </div>
     <button class="btn" data-act="create">Criar sala</button>`;
@@ -2070,11 +2202,11 @@ function renderLobby(){
   const soloOne=solo&&isPuzzle();
   app.innerHTML=`
   <div class="ticket"><div><small>Código da sala</small><div class="code">${code}</div></div><button data-act="copy">Copiar</button></div>
-  <div class="badges"><span class="badge">${GAMES[room.game].nome}${room.game==='picross'&&room.pz?(room.pz===2?' · Gigante':' · Grande'):''}</span><span class="badge">${fmt}</span></div>
+  <div class="badges"><span class="badge">${GAMES[room.game].nome}${isTimed()&&room.pz?(room.pz===2?' · Gigante':' · Grande'):''}</span><span class="badge">${fmt}</span>${solo&&isPuzzle()?'':`<span class="badge">MD${bestOf()}</span>`}</div>
   <div class="tip"><b class="k">Como funciona</b>${GAMES[room.game].desc}</div>
   <div class="teams ${soloOne?'solo-one':''}">${team('A')}${solo?(isPuzzle()?'':botCard):team('B')}</div>
   <div class="msg bad" style="margin-bottom:8px">${esc(ui.msg)}</div>
-  ${host?`<button class="btn ok" data-act="start" ${ready?'':'disabled'}>${soloOne?'Começar (5 fases)':'Começar (melhor de 3)'}</button>`:'<p class="wait">Aguardando o anfitrião começar…</p>'}
+  ${host?`<button class="btn ok" data-act="start" ${ready?'':'disabled'}>${soloOne?'Começar (5 fases)':(bestOf()===1?'Começar (MD1, rodada única)':`Começar (MD${bestOf()}, melhor de ${bestOf()})`)}</button>`:'<p class="wait">Aguardando o anfitrião começar…</p>'}
   <button class="link" data-act="leave">Sair da sala</button>`;
 }
 
@@ -2095,6 +2227,7 @@ function footHTML(res,fin){
 let draw=null;
 function renderPlay(){
   if(room.game==='picross')return mountPicross();
+  if(room.game==='minas')return renderMinas();
   const r=roundNow(),s=mySide(),res=room.res?.[r],fin=room.final||decided();
   const body=isPuzzle()?puzzleBody(res):turnBody(res);
   const spec=!s?'<div class="msg" style="margin-bottom:8px">Você está assistindo esta sala.</div>':'';
@@ -2180,7 +2313,7 @@ function dmBoardHTML(st,o){
     if(!path.length)origins.add(m.p[0]);
     else if(m.p.length>path.length&&path.every((q,i)=>m.p[i]===q))nexts.add(m.p[path.length]);
   }
-  const last=st.last,lastSet=new Set(last?[last.from,last.to]:[]),capd=new Set(last?last.caps:[]);
+  const last=st.last&&!st.last.pass?st.last:null,lastSet=new Set(last?[last.from,last.to]:[]),capd=new Set(last?last.caps:[]);
   let h=`<div class="dboard" style="--dsz:${o.px}px">`;
   for(let i=0;i<8;i++)for(let j=0;j<8;j++){
     const r=o.flip?7-i:i,c=o.flip?7-j:j,q=r*8+c,dark=(r+c)%2===1,v=st.b[q];
@@ -2219,10 +2352,13 @@ function damasBody(res){
     const mand=legal.some(m=>m.k.length);
     hint=path.length?(mand?'Continue a captura: toque na próxima casa.':'Toque na casa de destino.'):mand?'Captura obrigatória: escolha a que leva mais peças.':'Toque na peça que quer mover.';
   }
-  const who=`${solo?(stt==='A'?'Você começa':'O robô começa'):SIDE[stt]+' começa'} esta rodada${t.owner&&myTurn&&room.size>1?' · jogada '+(room.size===2?'da dupla':'da equipe'):''}`;
+  turnT0();
+  const showClk=!res&&!st.over&&Date.now()>=room.roundStart&&!(solo&&mover==='B');
+  const lastP=mv.length&&mv[mv.length-1]==='p'&&!res&&!st.over;
+  const who=`${solo?(stt==='A'?'Você começa':'O robô começa'):SIDE[stt]+' começa'} esta rodada${t.owner&&myTurn&&room.size>1?' · jogada '+(room.size===2?'da dupla':'da equipe'):''}${lastP?` · ${nameSide(mv.length%2===1?stt:other(stt))} perdeu a vez por tempo`:''}`;
   const quiet=st.quiet>=16?`<p class="sel-note">Só damas e sem captura: ${st.quiet} de ${DM_DRAW_PLIES} lances (empate aos ${DM_DRAW_PLIES}).</p>`:'';
   return `<div class="gx">
-    <div class="g-msg"><div class="msg ${cls}">${msg}</div><p class="sel-note" style="margin-top:6px">${who}</p></div>
+    <div class="g-msg"><div class="msg ${cls}">${msg}</div>${showClk?clockHTML(t.ok):''}<p class="sel-note" style="margin-top:6px">${who}</p></div>
     <div class="g-board dm">${board}</div>
     <div class="g-meta"><div class="dmeta">${chip('A',nA)}${chip('B',nB)}</div></div>
     <div class="g-tools">${hint?`<p class="sel-note" style="margin-bottom:8px">${hint}</p>`:''}${path.length?'<button class="btn sec" data-act="dcancel">Desfazer seleção</button>':''}${quiet}</div>
@@ -2252,13 +2388,127 @@ function telaDamas(res){
   const nm=sd=>room.solo?(sd==='A'?'Você':'Robô'):SIDE[sd];
   const mover=st.turn,mt=sidePlayers(mover),mn=mt.length>1?mt[Math.floor(mv.length/2)%mt.length]?.[1]?.name:'';
   const px=Math.floor(Math.max(240,Math.min(innerWidth-48,innerHeight-255,680)));
-  const who=res?'':`<div class="tinfo center" style="margin-bottom:10px">Vez de <span style="color:var(--team-${mover==='A'?'a':'b'})">${room.solo?nm(mover):'equipe '+SIDE[mover]}</span>${mn?' · '+esc(mn):''}</div>`;
+  turnT0();
+  const clk=!res&&!st.over&&Date.now()>=room.roundStart&&!(room.solo&&mover==='B')?clockHTML(false).replace('tclock','tclock big'):'';
+  const who=res?'':`<div class="tinfo center" style="margin-bottom:10px">Vez de <span style="color:var(--team-${mover==='A'?'a':'b'})">${room.solo?nm(mover):'equipe '+SIDE[mover]}</span>${mn?' · '+esc(mn):''}</div>${clk}`;
   const chip=(sd)=>`<span class="dc ${sd}">${esc(nm(sd))}<b>${dmCount(st.b,sd==='A'?1:-1)}</b></span>`;
   /* reconstrói as notações dos últimos lances */
-  const notes=[];{let b=dmStart(),tn=stt;for(const m of mv){const lg=dmMoves(b,tn==='A'?1:-1).find(x=>dmKey(x)===String(m));if(!lg)break;notes.push({side:tn,txt:dmNote({path:lg.p,caps:lg.k})});b=dmApply(b,lg);tn=tn==='A'?'B':'A'}}
+  const notes=[];{let b=dmStart(),tn=stt;for(const m of mv){if(m==='p'){notes.push({side:tn,txt:'passou (tempo)'});tn=tn==='A'?'B':'A';continue}const lg=dmMoves(b,tn==='A'?1:-1).find(x=>dmKey(x)===String(m));if(!lg)break;notes.push({side:tn,txt:dmNote({path:lg.p,caps:lg.k})});b=dmApply(b,lg);tn=tn==='A'?'B':'A'}}
   const log=notes.slice(-10).map(n=>`<span class="${n.side}">${nm(n.side)}: ${n.txt}</span>`).join('');
   return `<div class="tturn">${who}<div class="dmeta big">${chip('A')}${chip('B')}</div><div class="dtela">${dmBoardHTML(st,{flip:false,legal:null,path:[],tap:false,px})}</div><div class="tlog">${log}</div></div>`;
 }
+
+
+/* ---------- Campo minado: interface ---------- */
+const FLAGSVG='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 21V3" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" fill="none"/><path d="M6.5 4h11l-3 4.2 3 4.2h-11z" fill="currentColor"/></svg>';
+const MINESVG='<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="5.2" fill="currentColor"/><path d="M12 2.5v4M12 17.5v4M2.5 12h4M17.5 12h4M5.3 5.3l2.8 2.8M15.9 15.9l2.8 2.8M18.7 5.3l-2.8 2.8M8.1 15.9l-2.8 2.8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" fill="none"/></svg>';
+const objVals=o=>o?Object.keys(o).sort().map(k=>o[k]):[];
+function minasActs(side){
+  const r=roundNow(),mp=room?.logs?.[r]?.[side]?.moves||{},merged={...mp};
+  if(side===mySide()){const P=ui.mpend||{};for(const k of Object.keys(P)){if(mp[k]!==undefined||Date.now()-P[k].t>6000)delete P[k];else merged[k]=P[k].a}}
+  return Object.keys(merged).sort().map(k=>merged[k]);
+}
+function minasGridHTML(L,f,u,tap){
+  let h=`<div class="mgrid" style="--mn:${L.n};--mu:${u}px">`;
+  for(let i=0;i<L.n*L.n;i++){
+    const v=f.st[i];let cl='mc',inner='';
+    if(v===1){cl+=' r';const k=L.num[i];if(k){cl+=' n'+k;inner=k}}
+    else if(v===2){cl+=' h fl';inner=FLAGSVG}
+    else if(v===3){cl+=' ex';inner=MINESVG}
+    else cl+=' h';
+    h+=`<div class="${cl}"${tap&&(v===0||v===2)?` data-act="mc" data-i="${i}"`:''}>${inner}</div>`;
+  }
+  return h+'</div>';
+}
+const minasTime=(t0,pen,end)=>fmtC((end!=null?end:Date.now()-t0)+pen);
+function minasEnd(key,res,done,t0){
+  if(done)return done.t;
+  if(!res)return null;
+  ui.mfz=ui.mfz||{};return ui.mfz[key]??(ui.mfz[key]=Date.now()-t0);
+}
+function minasTap(i,flag){
+  const t=myTurnInfo();if(!t.ok)return;
+  const L=levelFor(),f=foldMinas(L,minasActs(mySide())),v=f.st[i];
+  const mode=flag?'flag':(ui.mmode||'open');
+  if(mode==='flag'){if(v===0||v===2)minasAct('f'+i)}
+  else if(v===0)minasAct('o'+i);
+}
+async function minasAct(a){
+  const t=myTurnInfo();if(!t.ok||!room)return;
+  const s=mySide(),r=roundNow(),L=levelFor(),key=pushKey();
+  ui.mpend=ui.mpend||{};ui.mpend[key]={a,t:Date.now()};
+  if(a[0]==='f')sfx('x');
+  const cur=foldMinas(L,minasActs(s));
+  render();
+  try{await db.set(`rooms/${code}/logs/${r}/${s}/moves/${key}`,a)}catch(e){delete ui.mpend[key];render();return}
+  if(cur.done&&!room.logs?.[r]?.[s]?.done){
+    const tt=Date.now()-room.roundStart;
+    try{await db.set(`rooms/${code}/logs/${r}/${s}/done`,{t:tt,errs:cur.errs,score:tt+cur.errs*PEN,at:Date.now(),moves:0})}catch(e){}
+  }
+}
+function renderMinas(){
+  const r=roundNow(),s=mySide()||'A',o=other(s),res=room.res?.[r],fin=room.final||decided(),solo=room.solo;
+  const L=levelFor(),pk=`${code}|${room.mid||0}|${r}|${s}`;
+  if(ui.mpk!==pk){ui.mpk=pk;ui.mpend={};ui.mprev=null;ui.mdone=false}
+  const mine=room.logs?.[r]?.[s]||{},opp=room.logs?.[r]?.[o]||{};
+  const f=foldMinas(L,minasActs(s)),fo=foldMinas(L,objVals(opp.moves));
+  const started=Date.now()>=room.roundStart,t=myTurnInfo();
+  /* sons e avisos a cada mudança do quadro (vale para jogadas de quem é da equipe também) */
+  const pv=ui.mprev;ui.mprev={errs:f.errs,resets:f.resets,rev:f.rev};
+  if(pv&&started){
+    if(f.errs>pv.errs){
+      if(f.resets>pv.resets){sfx('lose');fxShow(`<div class="fxmsg">Quadro reiniciado!<small>3 erros neste quadro</small></div>`,1500)}
+      else sfx('err');
+      setTimeout(()=>{pulse($('#mpw'));pulse($('#mpp'))},0);
+    }else if(f.rev>pv.rev)sfx('fill',Math.min(8,f.rev-pv.rev));
+  }
+  const en=mine.done?mine.done.errs:f.errs,pen=en*PEN,end=minasEnd(pk,res,mine.done,room.roundStart);
+  let msg='',cls='';
+  if(!started)msg='Prepare-se…';
+  else if(res)msg=res==='T'?'Rodada encerrada: empate.':solo?'Fase concluída!':`Rodada encerrada: vence ${SIDE[res]}.`;
+  else if(mine.done)msg=solo?'Concluído!':'Você terminou! Aguardando o adversário…';
+  else if(!mySide())msg='Você está assistindo.';
+  else{msg=room.size>1?'Abram juntos!':'Abra o campo!';cls=s}
+  const can=t.ok,mode=ui.mmode||'open';
+  const res2=d=>d?`${fmtT(d.t)} + ${d.errs} erro${d.errs===1?'':'s'} (${d.errs*10} s) = <b>${fmtT(d.score)}</b>`:'não terminou';
+  const info=res?`<div class="tip"><b class="k">Resultado</b>${solo?'':`<b>${SIDE[s]}:</b> `}${res2(mine.done)}${solo?'':`<br><b>${SIDE[o]}:</b> ${res2(opp.done)}`}</div>`:'';
+  const bx=boardBox('pl'),u=Math.max(14,Math.floor((Math.min(bx.maxW,bx.maxH)-12-(L.n-1)*2)/L.n));
+  const bar=(cls2,lab,c,tt)=>`<div class="bar ${cls2}"><span class="lab">${lab}</span><b>${c}/${tt}</b><div class="bg"><i style="width:${tt?Math.round(c/tt*100):0}%"></i></div></div>`;
+  const hint=mine.done||res?'':`Minas: <b>${L.nm}</b> · Bandeiras: <b>${f.flags}</b> · Erros neste quadro: <b>${f.cyc}/${MN_ERR_RESET}</b>`;
+  app.innerHTML=`${scoreBar()}${ROT_HINT}
+  <div class="gx pic">
+   <div class="g-meta"><div class="hud"><div class="hudL"><div class="hudT">Tempo</div><div class="timer" id="mt" data-t0="${room.roundStart}" data-pen="${pen}" ${end!=null?`data-end="${end}"`:''}>${minasTime(room.roundStart,pen,end)}</div><span class="pen ${en?'':'zero'}" id="mpp">${penText(en)}</span></div>
+     <div class="hudR">${bar(s,solo?'Você':SIDE[s]+(mySide()?' (você)':''),f.rev,f.total)}${bar(o+(solo?' solo':''),SIDE[o],fo.rev,fo.total)}</div></div></div>
+   <div class="g-msg"><div class="msg ${cls}">${msg}</div></div>
+   <div class="g-board pxwrap" id="mpw">${minasGridHTML(L,mine.done?foldMinas(L,minasActs(s)):f,u,can&&!mine.done&&!res)}</div>
+   <div class="g-tools"><div class="tools"><button class="btn ${mode==='open'?'on':''}" data-act="mmode" data-m="open" ${can?'':'disabled'}>■ Abrir</button><button class="btn ${mode==='flag'?'on x':''}" data-act="mmode" data-m="flag" ${can?'':'disabled'}>${FLAGSVG.replace('<svg','<svg class="fi"')} Bandeira</button></div>
+     ${hint?`<p class="sel-note" style="margin:8px 0 0">${hint}</p><p class="sel-note" style="margin:4px 0 0">Segure o dedo numa casa para pôr ou tirar bandeira.</p>`:''}</div>
+   <div class="g-info">${info}${footHTML(res,fin)}<button class="link" data-act="leave">Sair da sala</button></div>
+  </div>`;
+  if(mine.done&&!ui.mdone){ui.mdone=true;sfx('done');fxShow(`<div class="fxmsg">Terminou!<small>${fmtC(mine.done.score)} no total</small></div>`,1500);confetti(60)}
+  else if(!mine.done)ui.mdone=false;
+}
+function telaMinas(res){
+  const r=roundNow(),L=levelFor(),bx=boardBox('tela'),solo=room.solo;
+  const u=Math.max(12,Math.floor((Math.min(bx.maxW,bx.maxH-70)-12-(L.n-1)*2)/L.n));
+  const col=s=>{
+    const lg=room.logs?.[r]?.[s]||{},f=foldMinas(L,objVals(lg.moves));
+    const en=lg.done?lg.done.errs:f.errs,pen=en*PEN,end=minasEnd(`T${code}|${room.mid||0}|${r}|${s}`,res,lg.done,room.roundStart);
+    return `<div class="tcol ${s} ${solo?'solo-col':''}"><h3 style="color:var(--team-${s==='A'?'a':'b'})">${solo?esc(sidePlayers('A')[0]?.[1].name||'Jogador'):SIDE[s]}</h3>
+      <div class="pxwrap">${minasGridHTML(L,f,u,false)}</div>
+      <div class="hud"><div class="timer" data-t0="${room.roundStart}" data-pen="${pen}" ${end!=null?`data-end="${end}"`:''}>${minasTime(room.roundStart,pen,end)}</div><span class="pen ${en?'':'zero'}">${penText(en)}</span>
+      <div class="bar ${s}"><span class="lab"></span><b>${f.rev}/${f.total}</b><div class="bg"><i style="width:${f.total?Math.round(f.rev/f.total*100):0}%"></i></div></div></div></div>`;
+  };
+  return `<div class="tboards">${tSides().map(col).join('')}</div>`;
+}
+/* toque longo = bandeira */
+document.addEventListener('pointerdown',e=>{
+  const c=e.target.closest&&e.target.closest('.mc[data-act="mc"]');if(!c)return;
+  clearTimeout(ui.lpT);ui.lpFired=false;const i=+c.dataset.i;
+  ui.lpT=setTimeout(()=>{ui.lpFired=true;buzz(18);minasTap(i,true)},430);
+});
+['pointerup','pointercancel','pointerleave'].forEach(ev=>document.addEventListener(ev,()=>{clearTimeout(ui.lpT)}));
+document.addEventListener('contextmenu',e=>{const c=e.target.closest&&e.target.closest('.mc[data-act="mc"]');if(c){e.preventDefault();ui.lpFired=false;minasTap(+c.dataset.i,true)}});
 
 /* ---------- picross (jogador) ---------- */
 let PX=null,TX=null;
@@ -2340,7 +2590,7 @@ async function renderPlacar(){
   Object.values(m).forEach(e=>{const A=turmaNova(e.A),B=turmaNova(e.B),W=turmaNova(e.winnerTurma);[A,B].forEach(t=>{if(t)(T[t]??={j:0,v:0}).j++});if(W&&A!==B)T[W].v++});
   const rows=Object.entries(T).sort((a,b)=>b[1].v-a[1].v||a[1].j-b[1].j);
   app.innerHTML=`<div class="top"><div class="logo" style="font-size:28px">Placar <span>G3</span></div><button class="pillbtn" data-act="home">← Voltar</button></div>
-  <p class="sub">Vitórias por turma em partidas melhor de 3</p>
+  <p class="sub">Vitórias por turma nas partidas (MD1, MD3 e MD5)</p>
   <div class="card"><table><tr><th>Turma</th><th class="n">Partidas</th><th class="n">Vitórias</th></tr>${rows.map(([t,v],i)=>`<tr class="${i===0&&v.v>0?'first':''}"><td><span class="rank">#${i+1}</span>${esc(t)}<div class="mini"><i style="width:${v.j?Math.round(v.v/v.j*100):0}%"></i></div></td><td class="n">${v.j}</td><td class="n"><b>${v.v}</b></td></tr>`).join('')||'<tr><td colspan=3 style="color:var(--muted);text-align:center;padding:20px 6px">Nenhuma partida encerrada ainda.</td></tr>'}</table></div>
   <button class="btn sec" data-act="home">Voltar ao início</button>`;
 }
@@ -2367,7 +2617,7 @@ function telaTeam(side){
 }
 function telaHead(){
   const r=roundNow(),w=wins(),g=room.game,soloP=room.solo&&isPuzzle();
-  const mid=soloP?`<b>${Math.max(r,1)}/${SOLO_FASES}</b><small>${GAMES[g].nome} · fase</small>`:`<b>${w.A} × ${w.B}</b><small>${GAMES[g].nome} · rodada ${Math.max(r,1)}</small>`;
+  const mid=soloP?`<b>${Math.max(r,1)}/${SOLO_FASES}</b><small>${GAMES[g].nome} · fase</small>`:`<b>${w.A} × ${w.B}</b><small>${GAMES[g].nome} · MD${bestOf()} · rodada ${Math.max(r,1)}</small>`;
   return `<div class="thead ${soloP?'solo-head':''}">${telaTeam('A')}<div class="tmid"><span class="room">SALA ${code}</span>${mid}</div>${telaTeam('B')}</div>`;
 }
 function telaBanner(){
@@ -2382,7 +2632,7 @@ function renderTela(){
   if(room.status!=='lobby'&&g==='picross')return mountTelaPicross();
   let body='';
   if(room.status==='lobby')body=`<div class="card center" style="max-width:440px;margin:40px auto;padding:28px"><span class="lbl">Aguardando começar</span><div class="mono" style="font-size:48px;font-weight:800;letter-spacing:8px;margin:6px 0">${code}</div><p class="sub" style="margin:0">${GAMES[g].nome} · ${room.solo?'Solo':room.size+' contra '+room.size}</p></div>`;
-  else body=isPuzzle()?telaPuzzle(res):telaTurn(res);
+  else body=isPuzzle()?(g==='minas'?telaMinas(res):telaPuzzle(res)):telaTurn(res);
   app.innerHTML=telaHead()+telaBanner()+body+`<div class="tfoot"><button class="link" data-act="leave">Sair do telão</button><button class="link" data-act="fs">Tela cheia</button></div>`;
   if(draw){draw();draw=null}
 }
@@ -2478,13 +2728,14 @@ function fxCountdown(){
 document.addEventListener('click',async e=>{
   const b=e.target.closest('[data-act]');if(!b)return;const a=b.dataset.act;
   if(a==='create'){readHome();if(!me.name||!me.turma){ui.msg='Preencha seu nome e sua turma.';return render()}ui.msg='';
-    await createRoom(ui.gameSel,ui.fmt==='2'?2:ui.fmt==='3'?3:ui.fmt==='5'?5:1,+ui.pz,ui.fmt==='solo',+ui.bot)}
+    await createRoom(ui.gameSel,ui.fmt==='2'?2:ui.fmt==='3'?3:ui.fmt==='5'?5:1,+ui.pz,ui.fmt==='solo',+ui.bot,+(ui.bo||3))}
   else if(a==='join'){readHome();if(!me.name||!me.turma){ui.msg='Preencha seu nome e sua turma.';return render()}ui.msg='';await enter($('#cd').value)}
   else if(a==='htab'){readHome();ui.msg='';ui.homeTab=b.dataset.t;render()}
   else if(a==='pickgame'){readHome();ui.gameSel=b.dataset.g;render()}
   else if(a==='fmt'){readHome();ui.fmt=b.dataset.v;render()}
   else if(a==='botsel'){readHome();ui.bot=b.dataset.v;render()}
   else if(a==='pzsel'){readHome();ui.pz=b.dataset.v;render()}
+  else if(a==='bosel'){readHome();ui.bo=b.dataset.v;render()}
   else if(a==='copy'){try{await navigator.clipboard.writeText(code);b.textContent='Copiado!';setTimeout(()=>{b.textContent='Copiar'},1400)}catch(_){}}
   else if(a==='side'){ui.msg='';await joinSide(b.dataset.s)}
   else if(a==='start')await startMatch();
@@ -2503,6 +2754,8 @@ document.addEventListener('click',async e=>{
     else{ui.rstAt=Date.now();render();setTimeout(()=>{if(ui.rstAt&&Date.now()-ui.rstAt>=2900){ui.rstAt=0;render()}},3050)}
   }
   else if(a==='pmode'){ui.pmode=b.dataset.m;render()}
+  else if(a==='mc'){if(ui.lpFired){ui.lpFired=false;return}minasTap(+b.dataset.i,false)}
+  else if(a==='mmode'){ui.mmode=b.dataset.m;render()}
   else if(a==='pclr'){if(PX&&PX.board)PX.board.clearErrs()}
   else if(a==='dsq')damasTap(+b.dataset.sq);
   else if(a==='dcancel'){ui.dpath=[];render()}
@@ -2515,7 +2768,7 @@ document.addEventListener('change',e=>{
   if(e.target.id==='nm'||e.target.id==='tm')readHome();
 });
 document.addEventListener('keydown',e=>{if(e.target.matches&&e.target.matches('input,select'))return;
-  const k={ArrowUp:0,ArrowRight:1,ArrowDown:2,ArrowLeft:3}[e.key];if(k!==undefined&&room&&room.status==='play'&&isPuzzle()&&room.game!=='picross'){e.preventDefault();puzzleMove(k)}});
+  const k={ArrowUp:0,ArrowRight:1,ArrowDown:2,ArrowLeft:3}[e.key];if(k!==undefined&&room&&room.status==='play'&&isPuzzle()&&!isTimed()){e.preventDefault();puzzleMove(k)}});
 let tx=null;
 document.addEventListener('touchstart',e=>{if(e.target.id==='cv'){tx=[e.touches[0].clientX,e.touches[0].clientY]}},{passive:true});
 document.addEventListener('touchend',e=>{if(!tx)return;const t=e.changedTouches[0];const dx=t.clientX-tx[0],dy=t.clientY-tx[1];tx=null;
@@ -2541,7 +2794,7 @@ setInterval(()=>{timerTick();try{turnWatch();turnClockTick();fxCountdown()}catch
 (async()=>{
   try{db=FIREBASE_CONFIG?await makeFirebaseDB(FIREBASE_CONFIG):makeLocalDB()}
   catch(e){app.innerHTML='<p class="center" style="margin-top:44px">Não consegui conectar ao Firebase. Confira a configuração.</p>';return}
-  window.__arena={dmMoves,dmBotChoice,foldDamas,dmKey,dmStart,dmApply,PicrossBoard,genPicross,picSim,solvePicross,levelFor,ui,PSIZE,PSIZES,fmtC,board:()=>PX?.board,tboards:()=>TX?.boards,genPilar,genCaixas,foldPilar,foldCaixas,pilarBFS,pilarMove,pilarOk,sokoStep,foldPontos,foldPilhas,pilhasOk,botChoice,rng,hash,boardBox,get room(){return room},me};
+  window.__arena={genMinas,foldMinas,mnSolvable,dmMoves,dmBotChoice,foldDamas,dmKey,dmStart,dmApply,PicrossBoard,genPicross,picSim,solvePicross,levelFor,ui,PSIZE,PSIZES,fmtC,board:()=>PX?.board,tboards:()=>TX?.boards,genPilar,genCaixas,foldPilar,foldCaixas,pilarBFS,pilarMove,pilarOk,sokoStep,foldPontos,foldPilhas,pilhasOk,botChoice,rng,hash,boardBox,get room(){return room},me};
   if(code){const r=await db.get('rooms/'+code);if(r)subscribe();else{code=null;ls.set('arena_code',null)}}
   paintMute();render();
 })();
