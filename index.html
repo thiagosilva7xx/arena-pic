@@ -184,6 +184,12 @@ input::placeholder{color:#A39D91;font-weight:500}
   box-shadow:0 2px 0 var(--shadow);
 }
 .tg{display:flex;gap:6px}
+.tclock{display:flex;align-items:center;gap:9px;margin-top:8px;font-size:12px;font-weight:700;color:var(--muted)}
+.tclock .bg{flex:1;height:8px;border-radius:99px;background:#E4DDCB;overflow:hidden}
+.tclock i{display:block;height:100%;width:100%;background:var(--ink);border-radius:99px}
+.tclock b{min-width:1.6em;text-align:right;font-size:15px;font-weight:800;color:var(--ink);font-variant-numeric:tabular-nums}
+.tclock.low i{background:var(--bad)}.tclock.low b{color:var(--bad)}
+.tclock.big{max-width:520px;margin:0 auto 14px;font-size:15px}.tclock.big .bg{height:12px}.tclock.big b{font-size:28px;min-width:1.8em}
 .tg .seg{
   flex:1;height:42px;
   border-color:var(--line);
@@ -796,6 +802,7 @@ function makeLocalDB(){
     async set(p,v){const r=load();setAt(r,p,v);save(r);notify()},
     async update(p,obj){const r=load();for(const k in obj)setAt(r,p+'/'+k,obj[k]);save(r);notify()},
     async push(p,v){const r=load();const k=pushKey();setAt(r,p+'/'+k,v);save(r);notify();return k},
+    async setIfAbsent(p,v){const r=load();if(getAt(r,p)!==undefined)return false;setAt(r,p,v);save(r);notify();return true},
     async get(p){const v=getAt(load(),p);return v===undefined?null:v},
     on(p,cb){let last;const l=root=>{const v=getAt(root,p);const vv=v===undefined?null:v;const s=JSON.stringify(vv);if(s!==last){last=s;cb(vv)}};ls_.add(l);l(load());return()=>ls_.delete(l)}};
 }
@@ -808,6 +815,7 @@ async function makeFirebaseDB(cfg){
     async set(p,v){await dbm.set(R(p),v===undefined?null:v)},
     async update(p,obj){await dbm.update(R(p),obj)},
     async push(p,v){const r=dbm.push(R(p));await dbm.set(r,v);return r.key},
+    async setIfAbsent(p,v){const t=await dbm.runTransaction(R(p),cur=>cur===null?v:undefined);return t.committed},
     async get(p){const s=await dbm.get(R(p));return s.val()},
     on(p,cb){return dbm.onValue(R(p),s=>cb(s.val()))}};
 }
@@ -938,14 +946,23 @@ function solvePicross(n,rows,cols){
     for(let c=0;c<n;c++){const col=g.map(row=>row[c]);const nl=lineSolve(cols[c],col);if(!nl)return null;for(let r=0;r<n;r++)if(nl[r]!==g[r][c]){g[r][c]=nl[r];ch=true}}}
   return g;
 }
+/* Quão espelhado é o desenho: maior fração de casas iguais ao seu espelho (horizontal, vertical, diagonal ou giro de 180°). */
+function picSim(g,n){
+  const f=(fn)=>{let k=0;for(let r=0;r<n;r++)for(let c=0;c<n;c++){const [a,b]=fn(r,c);if(g[r][c]===g[a][b])k++}return k/(n*n)};
+  return Math.max(f((r,c)=>[r,n-1-c]),f((r,c)=>[n-1-r,c]),f((r,c)=>[c,r]),f((r,c)=>[n-1-c,n-1-r]),f((r,c)=>[n-1-r,n-1-c]));
+}
 function genPicross(seed,n){
-  for(let attempt=0;attempt<4000;attempt++){
-    const R=rng(seed+attempt*131);const sym=attempt<2500;const dens=0.52+R()*0.16;
+  /* Sem simetria: cada casa sorteada sozinha; desenhos espelhados são recusados.
+     Limite de semelhança cai com o tamanho; nas últimas tentativas relaxa um pouco para nunca travar. */
+  const lim0=n<=5?.72:n<=6?.72:.68;
+  for(let attempt=0;attempt<6000;attempt++){
+    const R=rng(seed+attempt*131);const dens=0.5+R()*0.16;
     const g=Array.from({length:n},()=>Array(n).fill(0));
-    for(let r=0;r<n;r++)for(let c=0;c<(sym?Math.ceil(n/2):n);c++){const v=R()<dens?1:0;g[r][c]=v;if(sym)g[r][n-1-c]=v}
+    for(let r=0;r<n;r++)for(let c=0;c<n;c++)g[r][c]=R()<dens?1:0;
     const rows=g.map(runsOf),cols=Array.from({length:n},(_,c)=>runsOf(g.map(row=>row[c])));
     if(rows.some(a=>!a.length)||cols.some(a=>!a.length))continue;
-    const tot=g.flat().reduce((a,b)=>a+b,0);if(tot<n*n*0.42||tot>n*n*0.72)continue;
+    const tot=g.flat().reduce((a,b)=>a+b,0);if(tot<n*n*0.42||tot>n*n*0.68)continue;
+    if(picSim(g,n)>lim0+Math.floor(attempt/1500)*.04)continue;
     const sol=solvePicross(n,rows,cols);if(!sol||sol.some(row=>row.includes(-1)))continue;
     return{n,sol:g.flat(),rows,cols};
   }
@@ -956,14 +973,14 @@ const PEN=10000,PSIZES=[[0,5,6,7,7,8],[0,6,8,10,10,10]],PSIZE=PSIZES[0];
 const PONTOS_N=20;
 function foldPontos(moves,starter){
   let rem=PONTOS_N,over=false,winner=null;
-  moves.forEach((m,i)=>{if(over)return;rem-=m;const mover=i%2===0?starter:(starter==='A'?'B':'A');if(rem<=0){over=true;winner=mover==='A'?'B':'A'}});
+  moves.forEach((m,i)=>{if(over||m==='p')return;rem-=m;const mover=i%2===0?starter:(starter==='A'?'B':'A');if(rem<=0){over=true;winner=mover==='A'?'B':'A'}});
   return{rem:Math.max(rem,0),over,winner};
 }
 const PILHAS0=[7,5];
 const parseMv=m=>String(m).split(',').map(Number);
 function foldPilhas(moves,starter){
   let a=PILHAS0[0],b=PILHAS0[1],over=false,winner=null;
-  moves.forEach((m,i)=>{if(over)return;const [x,y]=parseMv(m);a-=x;b-=y;const mover=i%2===0?starter:(starter==='A'?'B':'A');if(a===0&&b===0){over=true;winner=mover}});
+  moves.forEach((m,i)=>{if(over||m==='p')return;const [x,y]=parseMv(m);a-=x;b-=y;const mover=i%2===0?starter:(starter==='A'?'B':'A');if(a===0&&b===0){over=true;winner=mover}});
   return{a,b,over,winner};
 }
 const pilhasOk=(a,b,x,y)=>x>=0&&y>=0&&x<=a&&y<=b&&((x>0&&y===0)||(y>0&&x===0)||(x>0&&x===y));
@@ -973,15 +990,17 @@ const PERD=[[0,0],[1,2],[2,1],[3,5],[5,3],[4,7],[7,4]];
 const GAMES={
   pilar:{nome:'Pilar rolante',tipo:'corrida',desc:'Role o pilar até ele ficar em pé no bloco dourado. Se cair para fora, volta ao início (e conta como jogada). Vence quem usar menos jogadas.'},
   caixas:{nome:'Caixas',tipo:'corrida',desc:'Empurre as caixas até cobrir todos os alvos (qualquer caixa em qualquer alvo), sem travar nenhuma. Vence quem usar menos jogadas.'},
-  picross:{nome:'Picross',tipo:'corrida',desc:'Os dois lados recebem o mesmo desenho escondido. Use os números das linhas e colunas para pintar as casas certas. Errou uma casa: +10 s no seu tempo. Vence quem terminar com o menor tempo total. Na dupla, os dois pintam o mesmo quadro ao mesmo tempo.'},
-  pontos:{nome:'Pontos (o último perde)',tipo:'turnos',desc:'20 pontos no quadro. Cada um apaga 1, 2 ou 3 na sua vez. Quem apagar o último ponto perde.'},
-  pilhas:{nome:'Duas pilhas',tipo:'turnos',desc:'Pilhas de 7 e 5. Na sua vez, tire quantas quiser de uma pilha, ou a mesma quantidade das duas. Quem tirar a última pedra vence.'}
+  picross:{nome:'Picross',tipo:'corrida',desc:'Os dois lados recebem o mesmo desenho escondido. Use os números das linhas e colunas para pintar as casas certas. Errou uma casa: +10 s no seu tempo. Vence quem terminar com o menor tempo total. Em equipe, todos pintam o mesmo quadro ao mesmo tempo.'},
+  pontos:{nome:'Pontos (o último perde)',tipo:'turnos',desc:'20 pontos no quadro. Cada um apaga 1, 2 ou 3 na sua vez. Quem apagar o último ponto perde. Você tem 10 segundos para jogar: passou disso, a vez passa para o outro lado.'},
+  pilhas:{nome:'Duas pilhas',tipo:'turnos',desc:'Pilhas de 7 e 5. Na sua vez, tire quantas quiser de uma pilha, ou a mesma quantidade das duas. Quem tirar a última pedra vence. Você tem 10 segundos para jogar: passou disso, a vez passa para o outro lado.'}
 };
 const SIDE={A:'Azul',B:'Laranja'};
 let room=null;
 const nameSide=s=>room&&room.solo?(s==='A'?'Você':'Robô'):SIDE[s];
 const other=s=>s==='A'?'B':'A';
 const COUNT=3500, GRACE=60000, MAXR=300000;
+const TURN_MS=10000;   /* tempo para jogar nos jogos de turnos; passou, a vez passa */
+const TURN_PASS_MAX=4; /* passes seguidos (2 de cada lado) encerram a rodada em empate */
 
 /* =====================================================================
    ESTADO DO APP
@@ -1008,6 +1027,17 @@ function levelFor(){
 }
 const movesOf=side=>listOf(room?.logs?.[roundNow()]?.[side]?.moves);
 const turnMoves=()=>listOf(room?.logs?.[roundNow()]?.M);
+const mkey=i=>'m'+String(i).padStart(3,'0');
+/* Relógio do turno: cada aparelho marca quando viu a vez mudar. */
+const TC={key:'',t0:0};
+function turnT0(){
+  if(!room||room.status!=='play'||isPuzzle())return 0;
+  const key=`${code}|${room.mid||0}|${roundNow()}|${turnMoves().length}`;
+  if(TC.key!==key){TC.key=key;TC.t0=Math.max(Date.now(),room.roundStart||0)}
+  return TC.t0;
+}
+const turnMover=()=>{const r=roundNow(),i=turnMoves().length;return i%2===0?starter(r):other(starter(r))};
+const trailingPasses=()=>{const mv=turnMoves();let k=0;for(let i=mv.length-1;i>=0&&mv[i]==='p';i--)k++;return k};
 function wins(){const w={A:0,B:0};Object.values(room?.res||{}).forEach(v=>{if(v==='A'||v==='B')w[v]++});return w}
 const SOLO_FASES=5;
 function decided(){const w=wins();
@@ -1030,7 +1060,7 @@ async function enter(c){
 }
 function subscribe(){
   if(unsub)unsub();
-  unsub=db.on('rooms/'+code,v=>{room=v;if(!v){leave();return}render()});
+  unsub=db.on('rooms/'+code,v=>{room=v;if(!v){leave();return}try{turnT0()}catch(e){}render()});
 }
 function leave(){if(unsub)unsub();unsub=null;room=null;code=null;ls.set('arena_code',null);view='home';render()}
 async function joinSide(side){
@@ -1085,8 +1115,35 @@ async function puzzleMove(d){
 }
 async function turnMove(m){
   const t=myTurnInfo();if(!t.ok||ui.busy)return;ui.busy=true;sfx('tick');
-  await db.push(`rooms/${code}/logs/${roundNow()}/M`,m);
+  const r=roundNow(),i=turnMoves().length;
+  const ok=await db.setIfAbsent(`rooms/${code}/logs/${r}/M/${mkey(i)}`,m);
+  if(!ok){ui.busy=false;ui.msg='';sfx('err')}
 }
+/* Passa a vez quando o tempo acaba. Escrita "só se vazio": se a jogada e o passe chegarem juntos, vale quem chegou primeiro. */
+async function passTurn(){
+  if(!room||room.status!=='play'||isPuzzle())return;
+  const r=roundNow();if(room.res?.[r])return;
+  const i=turnMoves().length,key=`${code}|${room.mid||0}|${r}|${i}`;
+  if(ui.passFor===key)return;ui.passFor=key;
+  try{const ok=await db.setIfAbsent(`rooms/${code}/logs/${r}/M/${mkey(i)}`,'p');if(ok&&myTurnInfo().ok)sfx('err')}catch(e){ui.passFor=null}
+}
+/* Verifica o tempo: o próprio jogador da vez passa aos 10 s; o anfitrião cobre se ele sumiu. */
+function turnWatch(){
+  if(!room||room.status!=='play'||isPuzzle()||!db)return;
+  const r=roundNow();if(room.res?.[r]||Date.now()<room.roundStart)return;
+  if(room.solo&&turnMover()==='B')return;
+  const el=Date.now()-turnT0();
+  if(myTurnInfo().ok){if(el>=TURN_MS)passTurn()}
+  else if(room.host===me.id&&el>=TURN_MS+1200)passTurn();
+}
+function turnClockTick(){
+  document.querySelectorAll('.tclock').forEach(c=>{
+    const left=Math.max(0,TURN_MS-(Date.now()-turnT0())),fi=c.querySelector('i'),b=c.querySelector('b');
+    fi.style.width=(left/TURN_MS*100).toFixed(1)+'%';const sec=Math.ceil(left/1000);if(b.textContent!==String(sec))b.textContent=sec;
+    c.classList.toggle('low',left<=3000);
+  });
+}
+const clockHTML=(mine)=>`<div class="tclock ${mine?'mine':''}"><span>Tempo</span><div class="bg"><i></i></div><b>10</b></div>`;
 async function hostTick(){
   if(!room||room.host!==me.id||room.status!=='play')return;
   const r=roundNow();const now=Date.now();
@@ -1103,6 +1160,7 @@ async function hostTick(){
     }else{
       const st=room.game==='pontos'?foldPontos(turnMoves(),starter(r)):foldPilhas(turnMoves(),starter(r));
       if(st.over)w=st.winner;
+      else if(trailingPasses()>=TURN_PASS_MAX)w='T';
       else if(room.solo)botPlay(r,st);
     }
     if(w)await db.set(`rooms/${code}/res/${r}`,w);
@@ -1134,7 +1192,7 @@ function botPlay(r,st){
   const key=`${code}|${room.mid||0}|${r}|${i}`;if(ui.botFor===key)return;ui.botFor=key;
   setTimeout(async()=>{
     if(!room||room.status!=='play'||roundNow()!==r||room.res?.[r]||turnMoves().length!==i){if(ui.botFor===key)ui.botFor=null;return}
-    try{await db.push(`rooms/${code}/logs/${r}/M`,botChoice(st))}catch(e){ui.botFor=null}
+    try{await db.setIfAbsent(`rooms/${code}/logs/${r}/M/${mkey(i)}`,botChoice(st))}catch(e){ui.botFor=null}
   },800+Math.random()*700);
 }
 
@@ -1721,7 +1779,7 @@ function scoreBar(){
   const mid=solo&&isPuzzle()?`<div class="smid"><b>${Math.max(r,1)}/${SOLO_FASES}</b><small>fase</small></div>`:`<div class="smid"><b>${w.A} × ${w.B}</b><small>rod. ${Math.max(r,1)}</small></div>`;
   return `<div class="score">${side('A')}${mid}${side('B')}</div>`;
 }
-const ROT_HINT='<p class="rot">Dica: vire o celular na horizontal para uma área de jogo maior.</p>';
+const ROT_HINT='<p class="rot"></p>';
 function render(){renderInner();try{resultFx()}catch(e){console.error(e)}}
 let lastSK='';
 function renderInner(){
@@ -1772,10 +1830,12 @@ function renderHome(){
     <div class="tg">
       <button type="button" class="seg ${fmt==='1'?'on':''}" data-act="fmt" data-v="1">1 contra 1</button>
       <button type="button" class="seg ${fmt==='2'?'on':''}" data-act="fmt" data-v="2">2 contra 2</button>
+      <button type="button" class="seg ${fmt==='3'?'on':''}" data-act="fmt" data-v="3">3 contra 3</button>
       <button type="button" class="seg ${fmt==='solo'?'on':''}" data-act="fmt" data-v="solo">Solo</button>
     </div>
-    <input type="hidden" id="sz" value="${fmt==='2'?2:1}">
-    ${fmt==='2'?'<p class="gdesc plain">Na dupla, os jogadores se alternam nas jogadas.</p>':''}
+    <input type="hidden" id="sz" value="${fmt==='2'?2:fmt==='3'?3:1}">
+    ${fmt==='2'||fmt==='3'?`<p class="gdesc plain">Na equipe, os jogadores se alternam nas jogadas.${turnos?' Quem não jogar em 10 segundos perde a vez.':''}</p>`:''}
+    ${fmt==='1'&&turnos?'<p class="gdesc plain">Quem não jogar em 10 segundos perde a vez.</p>':''}
     ${fmt==='solo'?(turnos?`<div class="fold"><label>Nível do robô</label><div class="tg">${[['.5','Fácil'],['.75','Normal'],['1','Difícil']].map(([v,n])=>`<button type="button" class="seg ${ui.bot===v?'on':''}" data-act="botsel" data-v="${v}">${n}</button>`).join('')}</div></div>`:'<p class="gdesc plain">Você joga sozinho, em 5 fases de dificuldade crescente.</p>'):''}
     <div id="pzw" class="fold" style="display:${gs==='picross'?'block':'none'}">
       <label>Tamanho do Picross</label>
@@ -1788,7 +1848,7 @@ function renderHome(){
     <button class="btn" data-act="create">Criar sala</button>`;
   }else{
     panel=`<span class="lbl">Modo Projeção</span>
-    <p class="sub" style="margin-bottom:10px">Mostra os dois tabuleiros lado a lado ao vivo.</p>
+    <p class="sub" style="margin-bottom:10px">Mostra os dois tabuleiros lado a lado ao vivo. Ideal para tablet na horizontal ou projetor.</p>
     <input id="tcd" class="codein" maxlength="4" placeholder="ABCD" value="${esc(ui.tcd||'')}" autocomplete="off" autocapitalize="characters">
     <div class="row" style="margin-top:2px">
       <button class="btn" data-act="tela">Abrir telão</button>
@@ -1889,12 +1949,17 @@ function puzzleBody(res){
 function turnBody(res){
   const r=roundNow(),s=mySide(),solo=room.solo;const mv=turnMoves(),stt=starter(r);
   const st=room.game==='pontos'?foldPontos(mv,stt):foldPilhas(mv,stt);
-  const t=myTurnInfo(),i=mv.length,mover=i%2===0?stt:other(stt);
+  const t=myTurnInfo(),i=mv.length,mover=i%2===0?stt:other(stt);turnT0();
+  const mteam=sidePlayers(mover),mname=mteam.length>1?mteam[Math.floor(i/2)%mteam.length]?.[1]?.name:'';
   let msg='',cls='';
   if(Date.now()<room.roundStart)msg='Prepare-se…';
   else if(res)msg=res==='T'?'Empate.':solo?(res==='A'?'Você venceu a rodada!':'O robô venceu a rodada.'):`Rodada encerrada: vence ${SIDE[res]}.`;
   else if(t.ok){msg='Sua vez!';cls=s}
-  else msg=solo?'Vez do robô…':`Vez da equipe ${SIDE[mover]}`;
+  else if(solo)msg='Vez do robô…';
+  else msg=mover===s&&mname?`Vez de ${esc(mname)}, da sua equipe`:`Vez da equipe ${SIDE[mover]}${mname?' · '+esc(mname):''}`;
+  const showClk=!res&&Date.now()>=room.roundStart&&!(solo&&mover==='B');
+  const lastP=mv.length&&mv[mv.length-1]==='p'&&!res;
+  const lastWho=lastP?nameSide(mv.length%2===1?stt:other(stt)):'';
   const dis=!t.ok;let board='',tools='';
   if(room.game==='pontos'){
     const pk=`${code}|${room.mid||0}|${r}`,pr=ui.rem&&ui.rem.k===pk?ui.rem.v:st.rem;ui.rem={k:pk,v:st.rem};
@@ -1910,9 +1975,9 @@ function turnBody(res){
     tools=`<p class="sel-note">Tire só de uma pilha, ou a mesma quantidade das duas.</p>
     <button class="btn ${s==='B'?'la':'az'}" data-act="tpp" ${dis||!valid?'disabled':''}>Retirar ${x} e ${y}</button>`;
   }
-  const who=`${solo?(stt==='A'?'Você começa':'O robô começa'):SIDE[stt]+' começa'} esta rodada${t.owner&&!res&&t.ok&&room.size>1?' · jogada da dupla':''}`;
+  const who=`${solo?(stt==='A'?'Você começa':'O robô começa'):SIDE[stt]+' começa'} esta rodada${t.owner&&!res&&t.ok&&room.size>1?(room.size===2?' · jogada da dupla':' · jogada do trio'):''}${lastP?` · ${lastWho} perdeu a vez por tempo`:''}`;
   return `<div class="gx">
-    <div class="g-msg"><div class="msg ${cls}">${msg}</div><p class="sel-note" style="margin-top:6px">${who}</p></div>
+    <div class="g-msg"><div class="msg ${cls}">${msg}</div>${showClk?clockHTML(t.ok):''}<p class="sel-note" style="margin-top:6px">${who}</p></div>
     <div class="g-board turn">${board}</div>
     <div class="g-tools">${tools}</div>
     <div class="g-info"></div>
@@ -2056,13 +2121,14 @@ function telaPuzzle(res){
 function telaTurn(res){
   const r=roundNow(),g=room.game,stt=starter(r),mv=turnMoves();
   const st=g==='pontos'?foldPontos(mv,stt):foldPilhas(mv,stt);
-  const mover=mv.length%2===0?stt:other(stt);let board='';
+  const mover=mv.length%2===0?stt:other(stt);let board='';turnT0();
   if(g==='pontos'){const pk=`T${code}|${room.mid||0}|${r}`,pr=ui.rem&&ui.rem.k===pk?ui.rem.v:st.rem;ui.rem={k:pk,v:st.rem};
     board=`<div class="tray">${Array.from({length:PONTOS_N},(_,k)=>`<div class="dot ${k>=st.rem?'off':''} ${k>=st.rem&&k<pr?'gone':''}"></div>`).join('')}</div><p class="center tinfo">${st.rem} pontos no quadro</p>`}
   else board=['a','b'].map((k,i)=>`<div class="pcard"><div class="ph"><small>Pilha ${i+1}</small><b>${st[k]}</b></div><div class="tok">${Array.from({length:st[k]},()=>'<i></i>').join('')||'<span class="none">vazia</span>'}</div></div>`).join('');
   const nm=sd=>room.solo?(sd==='A'?'Você':'Robô'):SIDE[sd];
-  const log=mv.map((m,i)=>{const side=i%2===0?stt:other(stt);return `<span class="${side}">${nm(side)}: ${g==='pontos'?'−'+m:'−'+String(m).replace(',',' e −')}</span>`}).join('');
-  const who=res?'':`<div class="tinfo center" style="margin-bottom:10px">Vez de <span style="color:var(--team-${mover==='A'?'a':'b'})">${room.solo?nm(mover):'equipe '+SIDE[mover]}</span></div>`;
+  const log=mv.map((m,i)=>{const side=i%2===0?stt:other(stt);return `<span class="${side}">${nm(side)}: ${m==='p'?'passou (tempo)':g==='pontos'?'−'+m:'−'+String(m).replace(',',' e −')}</span>`}).join('');
+  const mt=sidePlayers(mover),mn=mt.length>1?mt[Math.floor(mv.length/2)%mt.length]?.[1]?.name:'';
+  const who=res?'':`<div class="tinfo center" style="margin-bottom:10px">Vez de <span style="color:var(--team-${mover==='A'?'a':'b'})">${room.solo?nm(mover):'equipe '+SIDE[mover]}</span>${mn?' · '+esc(mn):''}</div>${Date.now()>=room.roundStart&&!(room.solo&&mover==='B')?clockHTML(false).replace('tclock','tclock big'):''}`;
   return `<div class="tturn">${who}${board}<div class="tlog">${log}</div></div>`;
 }
 function mountTelaPicross(){
@@ -2132,7 +2198,7 @@ function fxCountdown(){
 document.addEventListener('click',async e=>{
   const b=e.target.closest('[data-act]');if(!b)return;const a=b.dataset.act;
   if(a==='create'){readHome();if(!me.name||!me.turma){ui.msg='Preencha seu nome e sua turma.';return render()}ui.msg='';
-    await createRoom(ui.gameSel,ui.fmt==='2'?2:1,+ui.pz,ui.fmt==='solo',+ui.bot)}
+    await createRoom(ui.gameSel,ui.fmt==='2'?2:ui.fmt==='3'?3:1,+ui.pz,ui.fmt==='solo',+ui.bot)}
   else if(a==='join'){readHome();if(!me.name||!me.turma){ui.msg='Preencha seu nome e sua turma.';return render()}ui.msg='';await enter($('#cd').value)}
   else if(a==='htab'){readHome();ui.msg='';ui.homeTab=b.dataset.t;render()}
   else if(a==='pickgame'){readHome();ui.gameSel=b.dataset.g;render()}
@@ -2186,13 +2252,13 @@ setInterval(()=>{
   }
   hostTick().catch(()=>{});
 },500);
-setInterval(()=>{timerTick();try{fxCountdown()}catch(e){}},60);
+setInterval(()=>{timerTick();try{turnWatch();turnClockTick();fxCountdown()}catch(e){}},60);
 
 /* ---------- início ---------- */
 (async()=>{
   try{db=FIREBASE_CONFIG?await makeFirebaseDB(FIREBASE_CONFIG):makeLocalDB()}
   catch(e){app.innerHTML='<p class="center" style="margin-top:44px">Não consegui conectar ao Firebase. Confira a configuração.</p>';return}
-  window.__arena={PicrossBoard,genPicross,solvePicross,levelFor,ui,PSIZE,PSIZES,fmtC,board:()=>PX?.board,tboards:()=>TX?.boards,genPilar,genCaixas,foldPilar,foldCaixas,pilarBFS,pilarMove,pilarOk,sokoStep,foldPontos,foldPilhas,pilhasOk,botChoice,rng,hash,boardBox,get room(){return room},me};
+  window.__arena={PicrossBoard,genPicross,picSim,solvePicross,levelFor,ui,PSIZE,PSIZES,fmtC,board:()=>PX?.board,tboards:()=>TX?.boards,genPilar,genCaixas,foldPilar,foldCaixas,pilarBFS,pilarMove,pilarOk,sokoStep,foldPontos,foldPilhas,pilhasOk,botChoice,rng,hash,boardBox,get room(){return room},me};
   if(code){const r=await db.get('rooms/'+code);if(r)subscribe();else{code=null;ls.set('arena_code',null)}}
   paintMute();render();
 })();
